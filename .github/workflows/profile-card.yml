@@ -1,0 +1,27 @@
+name: Profile card
+
+on:
+  schedule:
+    - cron: "23 2 * * *" # 每天一次 (UTC 02:23)
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Render cards
+        env:
+          GITHUB_TOKEN: ${{ secrets.TOKEN || github.token }}
+        run: python3 scripts/profile_card.py --user "${{ github.repository_owner }}" --out cards
+
+      - name: Commit if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add cards
+          git diff --cached --quiet || { git commit -m "Update profile card"; git push; }
