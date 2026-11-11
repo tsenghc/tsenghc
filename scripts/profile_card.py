@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Render the terminal-style profile card (light and dark SVG) from GitHub data.
+"""Render the profile card (light and dark SVG) from GitHub contribution data.
+
+Layout: name, role and three headline numbers on the left; a radial
+"year ring" on the right, one spoke per week for the last 52 weeks.
 
 Usage:
     GITHUB_TOKEN=... python3 scripts/profile_card.py [--user tsenghc] [--out cards]
@@ -12,6 +15,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import math
 import os
 import urllib.request
 from html import escape
@@ -31,25 +35,24 @@ query($login: String!) {
 }
 """
 
-ROLE = "SRE engineer"
+ROLE = "SRE Engineer"
 
+# One accent colour per theme; spokes blend from `track` to `accent` by intensity.
 THEMES = {
     "light": {
-        "bg": "#ffffff", "bar": "#f6f8fa", "border": "#d0d7de", "title": "#57606a",
-        "prompt": "#1a7f37", "cmd": "#24292f", "out": "#57606a", "accent": "#0969da",
-        "spark": "#1a7f37", "spark_bg": "#eaeef2",
-        "dots": ("#ff5f57", "#febc2e", "#28c840"),
+        "bg": "#ffffff", "border": "#e5e7eb", "text": "#0f172a", "muted": "#64748b",
+        "faint": "#94a3b8", "track": "#e2e8f0", "accent": "#0d9488", "glow": "#5eead4",
+        "rule": "#e2e8f0",
     },
     "dark": {
-        "bg": "#0d1117", "bar": "#161b22", "border": "#30363d", "title": "#8b949e",
-        "prompt": "#3fb950", "cmd": "#e6edf3", "out": "#8b949e", "accent": "#58a6ff",
-        "spark": "#3fb950", "spark_bg": "#21262d",
-        "dots": ("#ff5f57", "#febc2e", "#28c840"),
+        "bg": "#0d1117", "border": "#30363d", "text": "#f0f6fc", "muted": "#8b949e",
+        "faint": "#6e7681", "track": "#21262d", "accent": "#2dd4bf", "glow": "#99f6e4",
+        "rule": "#21262d",
     },
 }
 
-WIDTH, HEIGHT = 720, 326
-FONT = "ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace"
+WIDTH, HEIGHT = 720, 260
+SANS = "-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif"
 
 
 def fetch(login: str, token: str) -> dict:
@@ -68,111 +71,102 @@ def fetch(login: str, token: str) -> dict:
 
 def stats(user: dict) -> dict:
     cal = user["contributionsCollection"]["contributionCalendar"]
-    days = [d for w in cal["weeks"] for d in w["contributionDays"]]
+    weeks = cal["weeks"]
+    days = [d for w in weeks for d in w["contributionDays"]]
     counts = [d["contributionCount"] for d in days]
-
-    # Current streak: today may still be empty, so start from yesterday in that case.
-    i = len(counts) - 1
-    if i >= 0 and counts[i] == 0:
-        i -= 1
-    current = 0
-    while i >= 0 and counts[i] > 0:
-        current += 1
-        i -= 1
 
     longest = run = 0
     for c in counts:
         run = run + 1 if c > 0 else 0
         longest = max(longest, run)
 
-    weekly = [sum(d["contributionCount"] for d in w["contributionDays"]) for w in cal["weeks"]][-52:]
+    weekly = [sum(d["contributionCount"] for d in w["contributionDays"]) for w in weeks][-52:]
+    first_days = [w["contributionDays"][0]["date"] for w in weeks][-52:]
     return {
         "total": cal["totalContributions"],
-        "current": current,
         "longest": longest,
         "active": sum(1 for c in counts if c > 0),
         "days": len(counts),
         "weekly": weekly,
+        "week_start": first_days,
         "since": user["createdAt"][:4],
         "location": user.get("location") or "",
     }
 
 
-def render(login: str, s: dict, theme: dict) -> str:
-    t = theme
-    x0, line = 28, 24
-    y = 74
+def mix(a: str, b: str, t: float) -> str:
+    """Linear blend between two #rrggbb colours."""
+    ca = [int(a[i:i + 2], 16) for i in (1, 3, 5)]
+    cb = [int(b[i:i + 2], 16) for i in (1, 3, 5)]
+    return "#" + "".join(f"{round(x + (y - x) * t):02x}" for x, y in zip(ca, cb))
 
-    def prompt(cmd: str) -> str:
-        return (
-            f'<text x="{x0}" y="{y}"><tspan fill="{t["prompt"]}">$</tspan>'
-            f'<tspan fill="{t["cmd"]}"> {escape(cmd)}</tspan></text>'
+
+def ring(s: dict, t: dict, cx: float, cy: float) -> str:
+    """52 spokes around a circle, starting at 12 o'clock, oldest week first."""
+    inner, span = 46, 50
+    weekly = s["weekly"]
+    n = len(weekly) or 1
+    peak = max(weekly) or 1
+    out = [f'<circle cx="{cx}" cy="{cy}" r="{inner - 8}" fill="none" stroke="{t["rule"]}"/>']
+
+    for k, v in enumerate(weekly):
+        ang = -math.pi / 2 + 2 * math.pi * k / n
+        level = v / peak
+        length = 3 + span * math.sqrt(level)  # sqrt keeps quiet weeks visible
+        x1, y1 = cx + inner * math.cos(ang), cy + inner * math.sin(ang)
+        x2, y2 = cx + (inner + length) * math.cos(ang), cy + (inner + length) * math.sin(ang)
+        color = mix(t["track"], t["accent"], 0.25 + 0.75 * level) if v else t["track"]
+        out.append(
+            f'<line x1="{x1:.1f}" y1="{y1:.1f}" x2="{x2:.1f}" y2="{y2:.1f}" stroke="{color}" '
+            f'stroke-width="4.2" stroke-linecap="round"><title>week of {s["week_start"][k]}: {v}</title></line>'
         )
+        if k == n - 1:  # mark the current week
+            out.append(f'<circle cx="{x2:.1f}" cy="{y2:.1f}" r="4" fill="{t["glow"]}"/>')
 
-    def out(text: str, color: str | None = None) -> str:
-        return f'<text x="{x0}" y="{y}" fill="{color or t["out"]}">{text}</text>'
+    # Quarter labels: the month of the week sitting at each quarter of the ring.
+    for q in range(4):
+        k = min(n - 1, q * n // 4)
+        month = dt.date.fromisoformat(s["week_start"][k]).strftime("%b").upper()
+        ang = -math.pi / 2 + 2 * math.pi * k / n
+        r = inner - 20
+        x, y = cx + r * math.cos(ang), cy + r * math.sin(ang) + 3.5
+        out.append(f'<text x="{x:.1f}" y="{y:.1f}" class="tick" text-anchor="middle">{month}</text>')
+    return "".join(out)
 
-    parts = []
-    parts.append(prompt("whoami"))
-    y += line
-    who = " · ".join(p for p in (login, ROLE, s["location"]) if p)
-    parts.append(out(f'<tspan fill="{t["accent"]}">{escape(login)}</tspan>{escape(who[len(login):])}'))
-    y += line + 12
-    parts.append(prompt("uptime --contributions"))
-    y += line
-    parts.append(out(
-        f'<tspan fill="{t["cmd"]}" font-weight="700">{s["total"]:,}</tspan> contributions in the last year'
-    ))
-    y += line
-    parts.append(out(
-        f'streak {s["current"]} days · longest {s["longest"]} days · since {s["since"]}'
-    ))
-    y += line + 12
-    parts.append(prompt("sparkline --weeks 52"))
 
-    # Sparkline: one bar per week, scaled to the busiest week.
-    top = y + 12
-    h = 44
-    peak = max(s["weekly"]) or 1
-    gap = 3
-    step = (WIDTH - 2 * x0 + gap) / max(len(s["weekly"]), 1)
-    bw = step - gap
-    bars = []
-    for k, v in enumerate(s["weekly"]):
-        bx = round(x0 + k * step, 1)
-        bh = max(2, round(h * v / peak)) if v else 2
-        fill = t["spark"] if v else t["spark_bg"]
-        bars.append(
-            f'<rect x="{bx}" y="{top + h - bh}" width="{bw:.1f}" height="{bh}" rx="1.5" fill="{fill}">'
-            f"<title>{v} contributions</title></rect>"
-        )
-    cursor_y = top + h + 34
-    cursor = (
-        f'<text x="{x0}" y="{cursor_y}"><tspan fill="{t["prompt"]}">$</tspan></text>'
-        f'<rect class="cursor" x="{x0 + 16}" y="{cursor_y - 13}" width="9" height="16" fill="{t["cmd"]}"/>'
-    )
-
-    dots = "".join(
-        f'<circle cx="{20 + n * 18}" cy="18" r="5.5" fill="{c}"/>' for n, c in enumerate(t["dots"])
+def render(login: str, s: dict, t: dict) -> str:
+    x0 = 40
+    sub = " · ".join(p for p in (ROLE, s["location"]) if p)
+    metrics = [
+        (f'{s["total"]:,}', "CONTRIBUTIONS"),
+        (f'{s["longest"]}d', "LONGEST STREAK"),
+        (f'{s["active"]}/{s["days"]}', "ACTIVE DAYS"),
+    ]
+    cols = "".join(
+        f'<text x="{x0 + i * 140}" y="178" class="num">{escape(v)}</text>'
+        f'<text x="{x0 + i * 140}" y="200" class="label">{label}</text>'
+        for i, (v, label) in enumerate(metrics)
     )
     updated = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
 
     return f"""<svg xmlns="http://www.w3.org/2000/svg" width="{WIDTH}" height="{HEIGHT}" viewBox="0 0 {WIDTH} {HEIGHT}" role="img" aria-label="{escape(login)}: {s['total']:,} contributions in the last year">
   <style>
-    text {{ font-family: {FONT}; font-size: 14px; }}
-    .title {{ font-size: 12px; }}
-    .cursor {{ animation: blink 1.1s steps(1) infinite; }}
-    @keyframes blink {{ 50% {{ opacity: 0; }} }}
+    text {{ font-family: {SANS}; }}
+    .name {{ font-size: 34px; font-weight: 700; letter-spacing: -0.5px; fill: {t['text']}; }}
+    .sub {{ font-size: 15px; fill: {t['muted']}; }}
+    .num {{ font-size: 26px; font-weight: 650; fill: {t['text']}; font-variant-numeric: tabular-nums; }}
+    .label {{ font-size: 10.5px; font-weight: 600; letter-spacing: 1.4px; fill: {t['muted']}; }}
+    .foot {{ font-size: 11px; fill: {t['faint']}; }}
+    .tick {{ font-size: 9px; font-weight: 600; letter-spacing: 0.8px; fill: {t['faint']}; }}
   </style>
-  <rect x="0.5" y="0.5" width="{WIDTH - 1}" height="{HEIGHT - 1}" rx="10" fill="{t['bg']}" stroke="{t['border']}"/>
-  <path d="M0.5 36 V10.5 a10 10 0 0 1 10 -10 H{WIDTH - 10.5} a10 10 0 0 1 10 10 V36 Z" fill="{t['bar']}"/>
-  <line x1="0.5" y1="36" x2="{WIDTH - 0.5}" y2="36" stroke="{t['border']}"/>
-  {dots}
-  <text class="title" x="{WIDTH / 2}" y="22" text-anchor="middle" fill="{t['title']}">{escape(login)}@github: ~</text>
-  <text class="title" x="{WIDTH - 16}" y="22" text-anchor="end" fill="{t['title']}">{updated}</text>
-  {''.join(parts)}
-  {''.join(bars)}
-  {cursor}
+  <rect x="0.5" y="0.5" width="{WIDTH - 1}" height="{HEIGHT - 1}" rx="14" fill="{t['bg']}" stroke="{t['border']}"/>
+  <rect x="{x0}" y="44" width="28" height="4" rx="2" fill="{t['accent']}"/>
+  <text x="{x0}" y="92" class="name">{escape(login)}</text>
+  <text x="{x0}" y="118" class="sub">{escape(sub)}</text>
+  <line x1="{x0}" y1="140" x2="{x0 + 400}" y2="140" stroke="{t['rule']}"/>
+  {cols}
+  <text x="{x0}" y="232" class="foot">last 52 weeks · on GitHub since {s['since']} · updated {updated}</text>
+  {ring(s, t, cx=585, cy=HEIGHT / 2)}
 </svg>
 """
 
@@ -193,7 +187,7 @@ def main() -> None:
         with open(path, "w", encoding="utf-8") as f:
             f.write(render(args.user, s, theme))
         print(f"wrote {path}")
-    print(json.dumps({k: v for k, v in s.items() if k != "weekly"}))
+    print(json.dumps({k: v for k, v in s.items() if k not in ("weekly", "week_start")}))
 
 
 if __name__ == "__main__":
