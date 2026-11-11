@@ -4,5 +4,5 @@ _SRE engineer focusing on network observability, DNS, cloud infrastructure and a
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="cards/profile-dark.svg" />
-  <img src="cards/profile-light.svg" alt="tsenghc 的 GitHub 貢獻終端機卡片" width="720" />
+  <img src="cards/profile-light.svg" alt="tsenghc 的 GitHub 貢獻統計卡片" width="720" />
 </picture>
