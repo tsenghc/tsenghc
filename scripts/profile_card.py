@@ -107,7 +107,7 @@ def text_width(s: str, size: float) -> float:
 def languages(s: dict) -> str:
     """Stacked share bar plus a right-aligned, wrapping legend."""
     x_left = X1 - RIGHT_W
-    out = [f'<clipPath id="lb"><rect x="{x_left}" y="60" width="{RIGHT_W}" height="6" rx="3"/></clipPath><g clip-path="url(#lb)">']
+    out = [f'<clipPath id="lb"><rect x="{x_left}" y="60" width="{RIGHT_W}" height="6" rx="3"/></clipPath><g clip-path="url(#lb)"><g class="bars" style="transform-origin:{x_left}px 63px">']
     gap = 2
     usable = RIGHT_W - gap * (len(s["langs"]) - 1)
     x = x_left
@@ -115,7 +115,7 @@ def languages(s: dict) -> str:
         w = usable * pct / 100
         out.append(f'<rect x="{x:.1f}" y="60" width="{w:.1f}" height="6" fill="{col}"/>')
         x += w + gap
-    out.append("</g>")
+    out.append("</g></g>")
 
     # Each row is one <text> starting under the bar, so the renderer flows the
     # items itself; the width estimate only decides where rows break.
@@ -134,7 +134,7 @@ def languages(s: dict) -> str:
             f'<tspan dx="{14 if i else 0}" fill="{col}">●</tspan><tspan dx="5">{escape(label)}</tspan>'
             for i, (label, col) in enumerate(row)
         )
-        out.append(f'<text x="{x_left}" y="{86 + r * 17}" class="legend">{spans}</text>')
+        out.append(f'<text x="{x_left}" y="{86 + r * 17}" class="legend in d3">{spans}</text>')
     return "".join(out)
 
 
@@ -149,12 +149,15 @@ def signal(s: dict) -> str:
         f'<line x1="{X0}" y1="150" x2="{X1}" y2="150" stroke="{C["grid"]}" stroke-dasharray="2 6"/>'
         f'<line x1="{X0}" y1="190" x2="{X1}" y2="190" stroke="{C["grid"]}" stroke-dasharray="2 6"/>'
         f'<line x1="{X0}" y1="230" x2="{X1}" y2="230" stroke="{C["base"]}"/>'
-        f'<path d="{line} L{lx:.1f} 230 L{X0} 230 Z" fill="{C["signal"]}" fill-opacity="0.12"/>'
-        f'<path d="{line}" fill="none" stroke="{C["signal"]}" stroke-width="2" stroke-linejoin="round"/>'
-        f'<circle cx="{lx:.1f}" cy="{ly:.1f}" r="9" fill="{C["signal"]}" fill-opacity="0.2"/>'
-        f'<circle cx="{lx:.1f}" cy="{ly:.1f}" r="4" fill="{C["signal"]}"/>'
-        f'<text x="{X0}" y="253" class="foot">weekly contributions · last 52 weeks</text>'
-        f'<text x="{X1}" y="253" class="foot hi" text-anchor="end">peak {peak} · now {weekly[-1]}</text>'
+        f'<path class="area" d="{line} L{lx:.1f} 230 L{X0} 230 Z" fill="{C["signal"]}" fill-opacity="0.12"/>'
+        f'<path class="trace" pathLength="1" d="{line}" fill="none" stroke="{C["signal"]}" stroke-width="2" stroke-linejoin="round"/>'
+        # A spark rides the trace forever; SMIL because <img> SVGs cannot run scripts.
+        f'<g class="spark"><circle r="7" fill="{C["signal"]}" fill-opacity="0.25"/><circle r="2.5" fill="#e0f2fe"/>'
+        f'<animateMotion dur="7s" begin="2.8s" repeatCount="indefinite" path="{line}"/></g>'
+        f'<g class="now"><circle class="halo" cx="{lx:.1f}" cy="{ly:.1f}" r="9" fill="{C["signal"]}" fill-opacity="0.2"/>'
+        f'<circle cx="{lx:.1f}" cy="{ly:.1f}" r="4" fill="{C["signal"]}"/></g>'
+        f'<text x="{X0}" y="253" class="foot in d4">weekly contributions · last 52 weeks</text>'
+        f'<text x="{X1}" y="253" class="foot hi in d4" text-anchor="end">peak {peak} · now {weekly[-1]}</text>'
     )
 
 
@@ -170,11 +173,30 @@ def render(login: str, s: dict) -> str:
     .legend {{ font-family: {MONO}; font-size: 11px; fill: {C['sub']}; }}
     .foot {{ font-family: {MONO}; font-size: 11px; fill: {C['dim']}; }}
     .hi {{ fill: {C['sub']}; }}
+    /* Motion. Base styles are the final frame, so "animation: none" still shows everything. */
+    .in {{ animation: in .7s ease-out both; }}
+    .d1 {{ animation-delay: .15s; }} .d2 {{ animation-delay: .3s; }}
+    .d3 {{ animation-delay: .9s; }} .d4 {{ animation-delay: 2.2s; }}
+    .bars {{ animation: grow 1s cubic-bezier(.2,.7,.2,1) .4s both; }}
+    .trace {{ animation: draw 2.4s cubic-bezier(.4,0,.2,1) .4s both; }}
+    .area {{ animation: fade 1.2s ease-out 2s both; }}
+    .now {{ animation: fade .4s ease-out 2.6s both; }}
+    .halo {{ transform-box: fill-box; transform-origin: center; animation: pulse 2.4s ease-out 3s infinite; }}
+    .spark {{ animation: fade .4s linear 2.8s both; }}
+    @keyframes in {{ from {{ opacity: 0; transform: translateY(6px); }} }}
+    @keyframes fade {{ from {{ opacity: 0; }} }}
+    @keyframes grow {{ from {{ transform: scaleX(0); }} }}
+    @keyframes draw {{ from {{ stroke-dasharray: 1; stroke-dashoffset: 1; }} to {{ stroke-dasharray: 1; stroke-dashoffset: 0; }} }}
+    @keyframes pulse {{ from {{ transform: scale(1); opacity: 1; }} 70%, to {{ transform: scale(2.2); opacity: 0; }} }}
+    @media (prefers-reduced-motion: reduce) {{
+      * {{ animation: none !important; }}
+      .spark {{ display: none; }}
+    }}
   </style>
   <rect x="0.5" y="0.5" width="{W - 1}" height="{H - 1}" rx="14" fill="{C['bg']}" stroke="{C['border']}"/>
-  <text x="{X0}" y="76" class="name">{escape(login)}</text>
-  <text x="{X0}" y="110" class="sub">{escape(sub)}</text>
-  <text x="{X1}" y="48" class="stat" text-anchor="end" xml:space="preserve">{escape(stars)}</text>
+  <text x="{X0}" y="76" class="name in">{escape(login)}</text>
+  <text x="{X0}" y="110" class="sub in d1">{escape(sub)}</text>
+  <text x="{X1}" y="48" class="stat in d2" text-anchor="end" xml:space="preserve">{escape(stars)}</text>
   {languages(s)}
   {signal(s)}
 </svg>
